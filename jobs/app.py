@@ -88,6 +88,8 @@ def main():
     s3.put_object(Bucket=BUCKET, Key=key, Body=b"written with a Nomad workload identity\n")
     body = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
     print(f"s3://{BUCKET}/{key}: {body!r}")
+    # A fixed key that run-demo.sh uses to check that nginx can't reach this bucket.
+    s3.put_object(Bucket=BUCKET, Key="secret.txt", Body=b"private to s3-demo-app\n")
     listing = s3.list_objects_v2(Bucket=BUCKET).get("Contents", [])
     print(f"{BUCKET} now holds {len(listing)} object(s)")
 

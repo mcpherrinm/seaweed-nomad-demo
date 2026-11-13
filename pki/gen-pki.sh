@@ -54,6 +54,7 @@ issue() {
 issue nomad-server "server.global.nomad,nomad-server,localhost" "127.0.0.1"
 issue nomad-client "client.global.nomad,nomad-client,localhost" "127.0.0.1"
 issue seaweed "seaweed,localhost" "127.0.0.1"
+issue nginx "nginx,localhost" "127.0.0.1"
 
 chown -R "$SEAWEED_UID:$SEAWEED_UID" "$PKI_DIR/seaweed"
 

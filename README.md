@@ -11,6 +11,9 @@ keys**:
 This is the same pattern AWS uses for Kubernetes and GitHub Actions. Here Nomad
 is the identity provider and SeaweedFS plays the part of AWS.
 
+It also shows how to serve one bucket to the public, read-only, through nginx.
+A Nomad job publishes the content with the same identity flow.
+
 ```
 ./run-demo.sh            # build, start, run the demo jobs, print what happened
 docker compose down -v   # tear down
@@ -141,6 +144,39 @@ calls STS, and refreshes the credentials before they expire. `jobs/app.py`
 shows both an explicit STS call and the automatic path. Use path-style S3
 addressing, because SeaweedFS doesn't serve bucket subdomains by default.
 
+### 5. Optional: serve a bucket publicly through nginx
+
+The `s3-publisher` job (`jobs/publisher.nomad.hcl`) assumes `PublisherRole`
+in the same way. It creates bucket `public`, uploads a small site, and attaches
+a **bucket policy** that lets anyone read objects:
+
+```json
+{ "Effect": "Allow", "Principal": "*",
+  "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::public/*"] }
+```
+
+Only object reads are granted: anonymous listing, writes and reading the
+policy all stay denied. nginx (`nginx/nginx.conf`) then proxies
+`https://localhost:8443/<key>` to `public/<key>`. **It sends no credentials**,
+so it can never do more than an anonymous S3 client could. Its job is to
+narrow the S3 API down to a static file server:
+
+- only `GET` and `HEAD`;
+- requests with a query string are refused, since `?acl`, `?policy`,
+  `?list-type` and presigned `?X-Amz-*` parameters select other S3 operations;
+- the client's `Authorization` header is dropped;
+- the path is pinned to the one bucket, so `../` can't escape it.
+
+> **Pitfall:** the bucket policy is the real access control. A mistake in
+> nginx can at worst expose what the policy already makes public. A mistake in
+> the policy, such as `s3:*` or `Resource: "*"`, exposes data however nginx is
+> configured.
+
+> **Pitfall (SeaweedFS 4.40):** creating a bucket is authorised as `s3:*` on
+> the bucket ARN, not as `s3:CreateBucket`. `PublisherRole` therefore gets
+> `s3:*` on `arn:aws:s3:::public`, but only read, write and delete on the
+> objects.
+
 ### What the demo checks
 
 - `s3-demo-app` gets credentials, then writes and reads in `demo-app`.
@@ -149,6 +185,10 @@ addressing, because SeaweedFS doesn't serve bucket subdomains by default.
   because its `nomad_job_id` doesn't match the trust policy.
 - Anonymous S3 requests get a 403, and a client that doesn't trust the CA
   can't connect.
+- `s3-publisher` publishes to `public`, and nginx serves it. nginx refuses
+  writes, query strings and path escapes, both plain `../` and encoded. Direct
+  anonymous S3 can read `public` objects but can't list or write `public`, and
+  gets nothing from `demo-app`.
 
 ## Key ideas and pitfalls
 
@@ -189,20 +229,24 @@ The code comments mark these places with `PRODUCTION:`.
 | PKI | minica: throwaway CA, no rotation | Your organisation's CA. Certificates renewed automatically, CA key never on the hosts. |
 | Roles | One hand-written role | One role per app, or per namespace, managed as code. Narrow bucket and prefix permissions. |
 | SeaweedFS version | 4.40 | Pin a version and test token refresh against it. See the replay note above. |
+| Public nginx | One container with the demo certificate, no caching | A real certificate, `proxy_cache` or a CDN in front, rate limits and access logs. SeaweedFS's S3 port is reachable only from nginx and your apps, never from the internet. |
 
 ## Files
 
 | Path | Purpose |
 |---|---|
-| `docker-compose.yml` | The four services: `pki`, `nomad-server`, `nomad-client`, `seaweed` |
+| `docker-compose.yml` | The five services: `pki`, `nomad-server`, `nomad-client`, `seaweed`, `nginx` |
 | `pki/` | One-shot container that runs [minica](https://github.com/jsha/minica) to create a demo CA and per-service certificates in a volume. Everything else waits for it. |
 | `nomad/server.hcl`, `nomad/client.hcl` | Nomad agent config, including `oidc_issuer` and TLS |
-| `seaweed/iam.json` | SeaweedFS STS, provider, role and policy |
+| `seaweed/iam.json` | SeaweedFS STS, the Nomad provider, roles and policies |
 | `jobs/app.nomad.hcl`, `jobs/app.py` | The demo job and the boto3 app |
-| `run-demo.sh` | Runs the trusted job and the `intruder` job, then checks the results |
+| `jobs/publisher.nomad.hcl`, `jobs/publisher.py` | Publishes the `public` bucket and sets its bucket policy |
+| `nginx/nginx.conf` | Public, read-only HTTPS front end for the `public` bucket |
+| `run-demo.sh` | Runs the trusted, `intruder` and publisher jobs, then checks S3 and nginx |
 
-The Nomad UI is at https://127.0.0.1:4646. To trust the demo CA from the host,
-run `docker compose exec nomad-server cat /pki/ca.crt > ca.crt`.
+The Nomad UI is at https://127.0.0.1:4646, and the public site at
+https://localhost:8443/. To trust the demo CA from the host, run
+`docker compose exec nomad-server cat /pki/ca.crt > ca.crt`.
 
 ## References
 
@@ -219,4 +263,7 @@ run `docker compose exec nomad-server cat /pki/ca.crt > ca.crt`.
 - AWS: [AssumeRoleWithWebIdentity API](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html)
   · [SDK web identity settings](https://docs.aws.amazon.com/sdkref/latest/guide/feature-assume-role-credentials.html)
   · [Service-specific endpoints (`AWS_ENDPOINT_URL`)](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html)
+  · [S3 bucket policies](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-policies.html)
+  · [Bucket policy examples](https://docs.aws.amazon.com/AmazonS3/latest/userguide/example-bucket-policies.html)
+- nginx: [`ngx_http_proxy_module`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
 - [minica](https://github.com/jsha/minica)

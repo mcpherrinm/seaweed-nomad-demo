@@ -32,8 +32,12 @@
         "Statement": [
           {
             "Effect": "Allow",
-            "Principal": { "Federated": "nomad" },
-            "Action": ["sts:AssumeRoleWithWebIdentity"],
+            "Principal": {
+              "Federated": "nomad"
+            },
+            "Action": [
+              "sts:AssumeRoleWithWebIdentity"
+            ],
             "Condition": {
               "StringEquals": {
                 "oidc:nomad_namespace": "default",
@@ -43,7 +47,37 @@
           }
         ]
       },
-      "attachedPolicies": ["DemoAppBucket"]
+      "attachedPolicies": [
+        "DemoAppBucket"
+      ]
+    },
+    {
+      "roleName": "PublisherRole",
+      "roleArn": "arn:aws:iam::role/PublisherRole",
+      "description": "Assumable only by tasks of the Nomad job s3-publisher in the default namespace",
+      "trustPolicy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Federated": "nomad"
+            },
+            "Action": [
+              "sts:AssumeRoleWithWebIdentity"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "oidc:nomad_namespace": "default",
+                "oidc:nomad_job_id": "s3-publisher"
+              }
+            }
+          }
+        ]
+      },
+      "attachedPolicies": [
+        "PublicBucketPublisher"
+      ]
     }
   ],
   "policies": [
@@ -54,10 +88,40 @@
         "Statement": [
           {
             "Effect": "Allow",
-            "Action": ["s3:*"],
+            "Action": [
+              "s3:*"
+            ],
             "Resource": [
               "arn:aws:s3:::demo-app",
               "arn:aws:s3:::demo-app/*"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PublicBucketPublisher",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:*"
+            ],
+            "Resource": [
+              "arn:aws:s3:::public"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject"
+            ],
+            "Resource": [
+              "arn:aws:s3:::public/*"
             ]
           }
         ]
