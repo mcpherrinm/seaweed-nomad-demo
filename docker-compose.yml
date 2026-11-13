@@ -1,0 +1,112 @@
+# Demo: a Nomad task authenticates to SeaweedFS S3 with its Nomad workload
+# identity JWT via sts:AssumeRoleWithWebIdentity. No static S3 keys anywhere.
+# Everything talks TLS, using a demo CA that the pki service creates on first start.
+#
+# See README.md, or just run ./run-demo.sh.
+
+services:
+  # One-shot: creates the CA and the service certificates in the pki volume,
+  # then exits. Everything else waits for it to finish successfully.
+  pki:
+    build: ./pki
+    image: seaweed-nomad-demo/pki
+    environment:
+      PKI_DIR: /pki
+      SEAWEED_UID: "1000"
+    volumes:
+      - pki:/pki
+
+  nomad-server:
+    build: ./nomad
+    image: seaweed-nomad-demo/nomad
+    hostname: nomad-server
+    command: ["agent", "-config=/etc/nomad.d/server.hcl"]
+    environment: &nomad-cli-env
+      NOMAD_ADDR: https://127.0.0.1:4646
+      NOMAD_CACERT: /pki/ca.crt
+    volumes:
+      - ./nomad/server.hcl:/etc/nomad.d/server.hcl:ro
+      - ./jobs:/jobs:ro
+      # Only this service's directory of the pki volume.
+      - type: volume
+        source: pki
+        target: /pki
+        read_only: true
+        volume:
+          subpath: nomad-server
+    ports:
+      - "127.0.0.1:4646:4646"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--cacert", "/pki/ca.crt", "https://127.0.0.1:4646/.well-known/jwks.json"]
+      interval: 2s
+      retries: 30
+    depends_on:
+      pki:
+        condition: service_completed_successfully
+
+  nomad-client:
+    image: seaweed-nomad-demo/nomad
+    hostname: nomad-client
+    command: ["agent", "-config=/etc/nomad.d/client.hcl"]
+    environment: *nomad-cli-env
+    # The Nomad client manages cgroups for its tasks.
+    privileged: true
+    cgroup: host
+    volumes:
+      - ./nomad/client.hcl:/etc/nomad.d/client.hcl:ro
+      # raw_exec tasks run in this container, so the demo app uses
+      # /pki/ca.crt from here to trust SeaweedFS.
+      - type: volume
+        source: pki
+        target: /pki
+        read_only: true
+        volume:
+          subpath: nomad-client
+    depends_on:
+      pki:
+        condition: service_completed_successfully
+      nomad-server:
+        condition: service_healthy
+
+  seaweed:
+    image: chrislusf/seaweedfs:4.40
+    hostname: seaweed
+    # All-in-one master+volume+filer+S3. S3 serves HTTPS on 8333. The advanced
+    # IAM config enables STS and trusts Nomad as an OIDC provider; it reads
+    # /pki/ca.crt to verify Nomad's HTTPS when fetching the JWKS.
+    #
+    # PRODUCTION (iam.json can't hold comments, so the notes go here):
+    # - Run master, volume, filer and S3 separately, with persistent storage.
+    #   /data here is not a volume, so everything is lost on restart.
+    # - Every S3 gateway needs the same sts.issuer and sts.signingKey. Keep
+    #   signingKey in a secret store and render it at deploy time, not in git.
+    # - Protect internal gRPC between SeaweedFS components with security.toml.
+    # - 4.50+ rejects reused tokens by default (jtiReplayProtectionEnabled).
+    #   Test SDK credential refresh against the version you deploy.
+    command:
+      - server
+      - -dir=/data
+      - -ip=seaweed
+      - -s3
+      - -s3.port=8333
+      - -s3.cert.file=/pki/cert.pem
+      - -s3.key.file=/pki/key.pem
+      - -s3.iam.config=/etc/seaweedfs/iam.json
+    volumes:
+      - ./seaweed/iam.json:/etc/seaweedfs/iam.json:ro
+      - type: volume
+        source: pki
+        target: /pki
+        read_only: true
+        volume:
+          subpath: seaweed
+    ports:
+      - "127.0.0.1:8333:8333"
+    depends_on:
+      pki:
+        condition: service_completed_successfully
+      nomad-server:
+        condition: service_healthy
+
+volumes:
+  pki:

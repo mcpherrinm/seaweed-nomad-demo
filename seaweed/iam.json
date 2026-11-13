@@ -1,0 +1,67 @@
+{
+  "sts": {
+    "tokenDuration": "1h",
+    "maxSessionLength": "12h",
+    "issuer": "seaweedfs-sts",
+    "signingKey": "nVkyRyIiOfYSUX9pkpVM2EUGx1qbViq7XEwXVxY1/sc=",
+    "providers": [
+      {
+        "name": "nomad",
+        "type": "oidc",
+        "enabled": true,
+        "config": {
+          "issuer": "https://nomad-server:4646",
+          "clientId": "seaweedfs",
+          "jwksUri": "https://nomad-server:4646/.well-known/jwks.json",
+          "tlsCaCert": "/pki/ca.crt",
+          "jwksCacheTTLSeconds": 300
+        }
+      }
+    ]
+  },
+  "policy": {
+    "defaultEffect": "Deny"
+  },
+  "roles": [
+    {
+      "roleName": "DemoAppRole",
+      "roleArn": "arn:aws:iam::role/DemoAppRole",
+      "description": "Assumable only by tasks of the Nomad job s3-demo-app in the default namespace",
+      "trustPolicy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": { "Federated": "nomad" },
+            "Action": ["sts:AssumeRoleWithWebIdentity"],
+            "Condition": {
+              "StringEquals": {
+                "oidc:nomad_namespace": "default",
+                "oidc:nomad_job_id": "s3-demo-app"
+              }
+            }
+          }
+        ]
+      },
+      "attachedPolicies": ["DemoAppBucket"]
+    }
+  ],
+  "policies": [
+    {
+      "name": "DemoAppBucket",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:*"],
+            "Resource": [
+              "arn:aws:s3:::demo-app",
+              "arn:aws:s3:::demo-app/*"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
